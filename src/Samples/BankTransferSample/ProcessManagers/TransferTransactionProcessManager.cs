@@ -3,9 +3,8 @@ using System.Threading.Tasks;
 using BankTransferSample.ApplicationMessages;
 using BankTransferSample.Commands;
 using BankTransferSample.Domain;
-using ECommon.IO;
 using ENode.Commanding;
-using ENode.Infrastructure;
+using ENode.Messaging;
 
 namespace BankTransferSample.ProcessManagers
 {
@@ -29,115 +28,86 @@ namespace BankTransferSample.ProcessManagers
             _commandService = commandService;
         }
 
-        public async Task<AsyncTaskResult> HandleAsync(TransferTransactionStartedEvent evnt)
+        public async Task HandleAsync(TransferTransactionStartedEvent evnt)
         {
-            var task1 = _commandService.SendAsync(new ValidateAccountCommand(evnt.TransactionInfo.SourceAccountId, evnt.AggregateRootId) { Id = evnt.Id });
-            var task2 = _commandService.SendAsync(new ValidateAccountCommand(evnt.TransactionInfo.TargetAccountId, evnt.AggregateRootId) { Id = evnt.Id });
-            var totalResult = await Task.WhenAll(task1, task2).ConfigureAwait(false);
-
-            var failedResults = totalResult.Where(x => x.Status == AsyncTaskStatus.Failed);
-            if (failedResults.Count() > 0)
-            {
-                return new AsyncTaskResult(AsyncTaskStatus.Failed, string.Join("|", failedResults.Select(x => x.ErrorMessage)));
-            }
-
-            var ioExceptionResults = totalResult.Where(x => x.Status == AsyncTaskStatus.IOException);
-            if (ioExceptionResults.Count() > 0)
-            {
-                return new AsyncTaskResult(AsyncTaskStatus.IOException, string.Join("|", ioExceptionResults.Select(x => x.ErrorMessage)));
-            }
-
-            return AsyncTaskResult.Success;
+            var task1 = _commandService.SendAsync(new ValidateAccountCommand(evnt.TransactionInfo.SourceAccountId, evnt.AggregateRootId) { Id = evnt.Id, Items = evnt.Items });
+            var task2 = _commandService.SendAsync(new ValidateAccountCommand(evnt.TransactionInfo.TargetAccountId, evnt.AggregateRootId) { Id = evnt.Id, Items = evnt.Items });
+            await Task.WhenAll(task1, task2).ConfigureAwait(false);
         }
-        public Task<AsyncTaskResult> HandleAsync(AccountValidatePassedMessage message)
+        public async Task HandleAsync(AccountValidatePassedMessage message)
         {
-            return _commandService.SendAsync(new ConfirmAccountValidatePassedCommand(message.TransactionId, message.AccountId) { Id = message.Id });
+            await _commandService.SendAsync(new ConfirmAccountValidatePassedCommand(message.TransactionId, message.AccountId) { Id = message.Id, Items = message.Items });
         }
-        public Task<AsyncTaskResult> HandleAsync(AccountValidateFailedMessage message)
+        public async Task HandleAsync(AccountValidateFailedMessage message)
         {
-            return _commandService.SendAsync(new CancelTransferTransactionCommand(message.TransactionId) { Id = message.Id });
+            await _commandService.SendAsync(new CancelTransferTransactionCommand(message.TransactionId) { Id = message.Id, Items = message.Items });
         }
-        public Task<AsyncTaskResult> HandleAsync(AccountValidatePassedConfirmCompletedEvent evnt)
+        public async Task HandleAsync(AccountValidatePassedConfirmCompletedEvent evnt)
         {
-            return _commandService.SendAsync(new AddTransactionPreparationCommand(
+            await _commandService.SendAsync(new AddTransactionPreparationCommand(
                 evnt.TransactionInfo.SourceAccountId,
                 evnt.AggregateRootId,
                 TransactionType.TransferTransaction,
                 PreparationType.DebitPreparation,
                 evnt.TransactionInfo.Amount)
             {
-                Id = evnt.Id
+                Id = evnt.Id,
+                Items = evnt.Items
             });
         }
-        public Task<AsyncTaskResult> HandleAsync(TransactionPreparationAddedEvent evnt)
+        public async Task HandleAsync(TransactionPreparationAddedEvent evnt)
         {
             if (evnt.TransactionPreparation.TransactionType == TransactionType.TransferTransaction)
             {
                 if (evnt.TransactionPreparation.PreparationType == PreparationType.DebitPreparation)
                 {
-                    return _commandService.SendAsync(new ConfirmTransferOutPreparationCommand(evnt.TransactionPreparation.TransactionId) { Id = evnt.Id });
+                    await _commandService.SendAsync(new ConfirmTransferOutPreparationCommand(evnt.TransactionPreparation.TransactionId) { Id = evnt.Id, Items = evnt.Items });
                 }
                 else if (evnt.TransactionPreparation.PreparationType == PreparationType.CreditPreparation)
                 {
-                    return _commandService.SendAsync(new ConfirmTransferInPreparationCommand(evnt.TransactionPreparation.TransactionId) { Id = evnt.Id });
+                    await _commandService.SendAsync(new ConfirmTransferInPreparationCommand(evnt.TransactionPreparation.TransactionId) { Id = evnt.Id, Items = evnt.Items });
                 }
             }
-            return Task.FromResult(AsyncTaskResult.Success);
         }
-        public Task<AsyncTaskResult> HandleAsync(InsufficientBalanceException exception)
+        public async Task HandleAsync(InsufficientBalanceException exception)
         {
             if (exception.TransactionType == TransactionType.TransferTransaction)
             {
-                return _commandService.SendAsync(new CancelTransferTransactionCommand(exception.TransactionId) { Id = exception.Id });
+                await _commandService.SendAsync(new CancelTransferTransactionCommand(exception.TransactionId) { Id = exception.Id, Items = exception.Items });
             }
-            return Task.FromResult(AsyncTaskResult.Success);
         }
-        public Task<AsyncTaskResult> HandleAsync(TransferOutPreparationConfirmedEvent evnt)
+        public async Task HandleAsync(TransferOutPreparationConfirmedEvent evnt)
         {
-            return _commandService.SendAsync(new AddTransactionPreparationCommand(
+            await _commandService.SendAsync(new AddTransactionPreparationCommand(
                 evnt.TransactionInfo.TargetAccountId,
                 evnt.AggregateRootId,
                 TransactionType.TransferTransaction,
                 PreparationType.CreditPreparation,
                 evnt.TransactionInfo.Amount)
             {
-                Id = evnt.Id
+                Id = evnt.Id,
+                Items = evnt.Items
             });
         }
-        public async Task<AsyncTaskResult> HandleAsync(TransferInPreparationConfirmedEvent evnt)
+        public async Task HandleAsync(TransferInPreparationConfirmedEvent evnt)
         {
-            var task1 = _commandService.SendAsync(new CommitTransactionPreparationCommand(evnt.TransactionInfo.SourceAccountId, evnt.AggregateRootId) { Id = evnt.Id });
-            var task2 = _commandService.SendAsync(new CommitTransactionPreparationCommand(evnt.TransactionInfo.TargetAccountId, evnt.AggregateRootId) { Id = evnt.Id });
-            var totalResult = await Task.WhenAll(task1, task2).ConfigureAwait(false);
-
-            var failedResults = totalResult.Where(x => x.Status == AsyncTaskStatus.Failed);
-            if (failedResults.Count() > 0)
-            {
-                return new AsyncTaskResult(AsyncTaskStatus.Failed, string.Join("|", failedResults.Select(x => x.ErrorMessage)));
-            }
-
-            var ioExceptionResults = totalResult.Where(x => x.Status == AsyncTaskStatus.IOException);
-            if (ioExceptionResults.Count() > 0)
-            {
-                return new AsyncTaskResult(AsyncTaskStatus.IOException, string.Join("|", ioExceptionResults.Select(x => x.ErrorMessage)));
-            }
-
-            return AsyncTaskResult.Success;
+            var task1 = _commandService.SendAsync(new CommitTransactionPreparationCommand(evnt.TransactionInfo.SourceAccountId, evnt.AggregateRootId) { Id = evnt.Id, Items = evnt.Items });
+            var task2 = _commandService.SendAsync(new CommitTransactionPreparationCommand(evnt.TransactionInfo.TargetAccountId, evnt.AggregateRootId) { Id = evnt.Id, Items = evnt.Items });
+            await Task.WhenAll(task1, task2).ConfigureAwait(false);
         }
-        public Task<AsyncTaskResult> HandleAsync(TransactionPreparationCommittedEvent evnt)
+        public async Task HandleAsync(TransactionPreparationCommittedEvent evnt)
         {
             if (evnt.TransactionPreparation.TransactionType == TransactionType.TransferTransaction)
             {
                 if (evnt.TransactionPreparation.PreparationType == PreparationType.DebitPreparation)
                 {
-                    return _commandService.SendAsync(new ConfirmTransferOutCommand(evnt.TransactionPreparation.TransactionId) { Id = evnt.Id });
+                    await _commandService.SendAsync(new ConfirmTransferOutCommand(evnt.TransactionPreparation.TransactionId) { Id = evnt.Id, Items = evnt.Items });
                 }
                 else if (evnt.TransactionPreparation.PreparationType == PreparationType.CreditPreparation)
                 {
-                    return _commandService.SendAsync(new ConfirmTransferInCommand(evnt.TransactionPreparation.TransactionId) { Id = evnt.Id });
+                    await _commandService.SendAsync(new ConfirmTransferInCommand(evnt.TransactionPreparation.TransactionId) { Id = evnt.Id, Items = evnt.Items });
                 }
             }
-            return Task.FromResult(AsyncTaskResult.Success);
         }
     }
 }

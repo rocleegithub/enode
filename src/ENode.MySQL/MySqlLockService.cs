@@ -1,8 +1,12 @@
 ﻿using System;
 using System.Data;
 using System.Linq;
+using System.Threading.Tasks;
 using Dapper;
+using ECommon.Components;
 using ECommon.Dapper;
+using ECommon.Extensions;
+using ECommon.IO;
 using ECommon.Utilities;
 using ENode.Infrastructure;
 using MySql.Data.MySqlClient;
@@ -16,6 +20,7 @@ namespace ENode.MySQL
         private string _connectionString;
         private string _tableName;
         private string _lockKeySqlFormat;
+        private IOHelper _ioHelper;
 
         #endregion
 
@@ -31,43 +36,64 @@ namespace ENode.MySQL
 
             _lockKeySqlFormat = "SELECT * FROM " + _tableName + " WHERE Name = '{0}' LOCK IN SHARE MODE";
 
+            _ioHelper = ObjectContainer.Resolve<IOHelper>();
+
             return this;
         }
-        public void AddLockKey(string lockKey)
+        public async Task AddLockKey(string lockKey)
         {
-            using (var connection = GetConnection())
+            await _ioHelper.TryIOActionAsync(async () =>
             {
-                var count = connection.QueryList(new { Name = lockKey }, _tableName).Count();
-                if (count == 0)
+                using (var connection = GetConnection())
                 {
-                    connection.Insert(new { Name = lockKey }, _tableName);
+                    await connection.OpenAsync().ConfigureAwait(false);
+                    var list = await connection.QueryListAsync(new { Name = lockKey }, _tableName);
+                    if (list.Count() == 0)
+                    {
+                        await connection.InsertAsync(new { Name = lockKey }, _tableName);
+                    }
+                }
+            }, "AddLockKey");
+        }
+        public async Task ExecuteInLock(string lockKey, Func<Task> action)
+        {
+            try
+            {
+                using (var connection = GetConnection())
+                {
+                    await connection.OpenAsync().ConfigureAwait(false);
+                    var transaction = await Task.Run(() => connection.BeginTransaction()).ConfigureAwait(false);
+                    try
+                    {
+                        await LockKey(transaction, lockKey);
+                        await action();
+                        await Task.Run(() => transaction.Commit()).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        await Task.Run(() => transaction.Rollback()).ConfigureAwait(false);
+                        throw;
+                    }
                 }
             }
-        }
-        public void ExecuteInLock(string lockKey, Action action)
-        {
-            using (var connection = GetConnection())
+            catch (AggregateException aggregateException)
             {
-                connection.Open();
-                var transaction = connection.BeginTransaction();
-                try
+                if (aggregateException.InnerExceptions.IsNotEmpty()
+                 && aggregateException.InnerExceptions.Any(x => x is MySqlException))
                 {
-                    LockKey(transaction, lockKey);
-                    action();
-                    transaction.Commit();
+                    throw new IOException("ExecuteInLock has io exception, lockKey: " + lockKey, aggregateException);
                 }
-                catch
-                {
-                    transaction.Rollback();
-                    throw;
-                }
+            }
+            catch (MySqlException ex)
+            {
+                throw new IOException("ExecuteInLock has io exception, lockKey: " + lockKey, ex);
             }
         }
 
-        private void LockKey(IDbTransaction transaction, string key)
+        private Task LockKey(IDbTransaction transaction, string key)
         {
             var sql = string.Format(_lockKeySqlFormat, key);
-            transaction.Connection.Query(sql, transaction: transaction);
+            return transaction.Connection.QueryAsync(sql, transaction: transaction);
         }
         private MySqlConnection GetConnection()
         {

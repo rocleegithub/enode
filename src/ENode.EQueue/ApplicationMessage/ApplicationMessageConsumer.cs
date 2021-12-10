@@ -3,6 +3,7 @@ using ECommon.Components;
 using ECommon.Logging;
 using ECommon.Serializing;
 using ENode.Infrastructure;
+using ENode.Messaging;
 using EQueue.Clients.Consumers;
 using EQueue.Protocols;
 using IQueueMessageHandler = EQueue.Clients.Consumers.IMessageHandler;
@@ -14,7 +15,7 @@ namespace ENode.EQueue
         private const string DefaultMessageConsumerGroup = "ApplicationMessageConsumerGroup";
         private IJsonSerializer _jsonSerializer;
         private ITypeNameProvider _typeNameProvider;
-        private IMessageProcessor<ProcessingApplicationMessage, IApplicationMessage> _processor;
+        private IMessageDispatcher _messageDispatcher;
         private ILogger _logger;
 
         public Consumer Consumer { get; private set; }
@@ -22,7 +23,7 @@ namespace ENode.EQueue
         public ApplicationMessageConsumer InitializeENode()
         {
             _jsonSerializer = ObjectContainer.Resolve<IJsonSerializer>();
-            _processor = ObjectContainer.Resolve<IMessageProcessor<ProcessingApplicationMessage, IApplicationMessage>>();
+            _messageDispatcher = ObjectContainer.Resolve<IMessageDispatcher>();
             _typeNameProvider = ObjectContainer.Resolve<ITypeNameProvider>();
             _logger = ObjectContainer.Resolve<ILoggerFactory>().Create(GetType().FullName);
             return this;
@@ -32,7 +33,7 @@ namespace ENode.EQueue
             InitializeENode();
             Consumer = new Consumer(groupName ?? DefaultMessageConsumerGroup, setting ?? new ConsumerSetting
             {
-                MessageHandleMode = MessageHandleMode.Sequential,
+                MessageHandleMode = MessageHandleMode.Parallel,
                 ConsumeFromWhere = ConsumeFromWhere.FirstOffset
             }, "ApplicationMessageConsumer");
             return this;
@@ -56,12 +57,17 @@ namespace ENode.EQueue
 
         void IQueueMessageHandler.Handle(QueueMessage queueMessage, IMessageContext context)
         {
+            var applicationMessageString = Encoding.UTF8.GetString(queueMessage.Body);
+
+            _logger.InfoFormat("Received application message equeue message: {0}, applicationMessage: {1}", queueMessage, applicationMessageString);
+
             var applicationMessageType = _typeNameProvider.GetType(queueMessage.Tag);
-            var message = _jsonSerializer.Deserialize(Encoding.UTF8.GetString(queueMessage.Body), applicationMessageType) as IApplicationMessage;
-            var processContext = new EQueueProcessContext(queueMessage, context);
-            var processingMessage = new ProcessingApplicationMessage(message, processContext);
-            _logger.InfoFormat("ENode application message received, messageId: {0}, routingKey: {1}", message.Id, message.GetRoutingKey());
-            _processor.Process(processingMessage);
+            var message = _jsonSerializer.Deserialize(applicationMessageString, applicationMessageType) as IApplicationMessage;
+
+            _messageDispatcher.DispatchMessageAsync(message).ContinueWith(x =>
+            {
+                context.OnMessageHandled(queueMessage);
+            });
         }
     }
 }

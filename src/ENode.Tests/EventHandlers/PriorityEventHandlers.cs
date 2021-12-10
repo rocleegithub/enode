@@ -2,7 +2,8 @@
 using System.Threading.Tasks;
 using ECommon.IO;
 using ECommon.Logging;
-using ENode.Infrastructure;
+using ENode.Eventing;
+using ENode.Messaging;
 using ENode.Tests.Domain;
 
 namespace ENode.Tests
@@ -18,7 +19,7 @@ namespace ENode.Tests
         }
 
         [Priority(4)]
-        public Task<AsyncTaskResult> HandleAsync(Event1 evnt)
+        public Task HandleAsync(Event1 evnt)
         {
             _logger.Info("event1 handled by handler1.");
             CommandAndEventServiceTest.HandlerTypes.AddOrUpdate(1,
@@ -28,7 +29,7 @@ namespace ENode.Tests
                 existing.Add(GetType().Name);
                 return existing;
             });
-            return Task.FromResult(AsyncTaskResult.Success);
+            return Task.CompletedTask;
         }
     }
     [Priority(3)]
@@ -41,7 +42,7 @@ namespace ENode.Tests
             _logger = loggerFactory.Create(typeof(Handler2).Name);
         }
 
-        public Task<AsyncTaskResult> HandleAsync(Event1 evnt)
+        public Task HandleAsync(Event1 evnt)
         {
             _logger.Info("event1 handled by handler2.");
             CommandAndEventServiceTest.HandlerTypes.AddOrUpdate(1,
@@ -51,7 +52,7 @@ namespace ENode.Tests
                 existing.Add(GetType().Name);
                 return existing;
             });
-            return Task.FromResult(AsyncTaskResult.Success);
+            return Task.CompletedTask;
         }
     }
     [Priority(2)]
@@ -64,7 +65,7 @@ namespace ENode.Tests
             _logger = loggerFactory.Create(typeof(Handler3).Name);
         }
 
-        public Task<AsyncTaskResult> HandleAsync(Event1 evnt)
+        public Task HandleAsync(Event1 evnt)
         {
             _logger.Info("event1 handled by handler3.");
             CommandAndEventServiceTest.HandlerTypes.AddOrUpdate(1,
@@ -74,7 +75,7 @@ namespace ENode.Tests
                 existing.Add(GetType().Name);
                 return existing;
             });
-            return Task.FromResult(AsyncTaskResult.Success);
+            return Task.CompletedTask;
         }
     }
 
@@ -88,7 +89,7 @@ namespace ENode.Tests
             _logger = loggerFactory.Create(typeof(Handler121).Name);
         }
 
-        public Task<AsyncTaskResult> HandleAsync(Event1 evnt, Event2 evnt2)
+        public Task HandleAsync(Event1 evnt, Event2 evnt2)
         {
             _logger.Info("event1,event2 handled by handler1.");
             CommandAndEventServiceTest.HandlerTypes.AddOrUpdate(2,
@@ -98,7 +99,7 @@ namespace ENode.Tests
                 existing.Add(GetType().Name);
                 return existing;
             });
-            return Task.FromResult(AsyncTaskResult.Success);
+            return Task.CompletedTask;
         }
     }
     [Priority(2)]
@@ -111,7 +112,7 @@ namespace ENode.Tests
             _logger = loggerFactory.Create(typeof(Handler122).Name);
         }
 
-        public Task<AsyncTaskResult> HandleAsync(Event1 evnt, Event2 evnt2)
+        public Task HandleAsync(Event1 evnt, Event2 evnt2)
         {
             _logger.Info("event1,event2 handled by handler2.");
             CommandAndEventServiceTest.HandlerTypes.AddOrUpdate(2,
@@ -121,7 +122,7 @@ namespace ENode.Tests
                 existing.Add(GetType().Name);
                 return existing;
             });
-            return Task.FromResult(AsyncTaskResult.Success);
+            return Task.CompletedTask;
         }
     }
     [Priority(1)]
@@ -135,7 +136,7 @@ namespace ENode.Tests
         }
 
         [Priority(4)]
-        public Task<AsyncTaskResult> HandleAsync(Event1 evnt, Event2 evnt2)
+        public Task HandleAsync(Event1 evnt, Event2 evnt2)
         {
             _logger.Info("event1,event2 handled by handler3.");
             CommandAndEventServiceTest.HandlerTypes.AddOrUpdate(2,
@@ -145,7 +146,7 @@ namespace ENode.Tests
                 existing.Add(GetType().Name);
                 return existing;
             });
-            return Task.FromResult(AsyncTaskResult.Success);
+            return Task.CompletedTask;
         }
     }
 
@@ -159,7 +160,7 @@ namespace ENode.Tests
             _logger = loggerFactory.Create(typeof(Handler1231).Name);
         }
 
-        public Task<AsyncTaskResult> HandleAsync(Event1 evnt, Event2 evnt2, Event3 evnt3)
+        public Task HandleAsync(Event1 evnt, Event2 evnt2, Event3 evnt3)
         {
             _logger.Info("event1,event2,event3 handled by handler1.");
             CommandAndEventServiceTest.HandlerTypes.AddOrUpdate(3,
@@ -169,7 +170,7 @@ namespace ENode.Tests
                 existing.Add(GetType().Name);
                 return existing;
             });
-            return Task.FromResult(AsyncTaskResult.Success);
+            return Task.CompletedTask;
         }
     }
     [Priority(2)]
@@ -182,7 +183,7 @@ namespace ENode.Tests
             _logger = loggerFactory.Create(typeof(Handler1232).Name);
         }
 
-        public Task<AsyncTaskResult> HandleAsync(Event1 evnt, Event2 evnt2, Event3 evnt3)
+        public Task HandleAsync(Event1 evnt, Event2 evnt2, Event3 evnt3)
         {
             _logger.Info("event1,event2,event3 handled by handler2.");
             CommandAndEventServiceTest.HandlerTypes.AddOrUpdate(3,
@@ -192,7 +193,7 @@ namespace ENode.Tests
                 existing.Add(GetType().Name);
                 return existing;
             });
-            return Task.FromResult(AsyncTaskResult.Success);
+            return Task.CompletedTask;
         }
     }
     [Priority(1)]
@@ -206,7 +207,7 @@ namespace ENode.Tests
         }
 
         [Priority(4)]
-        public Task<AsyncTaskResult> HandleAsync(Event1 evnt, Event2 evnt2, Event3 evnt3)
+        public Task HandleAsync(Event1 evnt, Event2 evnt2, Event3 evnt3)
         {
             _logger.Info("event1,event2,event3 handled by handler3.");
             CommandAndEventServiceTest.HandlerTypes.AddOrUpdate(3,
@@ -216,7 +217,7 @@ namespace ENode.Tests
                 existing.Add(GetType().Name);
                 return existing;
             });
-            return Task.FromResult(AsyncTaskResult.Success);
+            return Task.CompletedTask;
         }
     }
 }

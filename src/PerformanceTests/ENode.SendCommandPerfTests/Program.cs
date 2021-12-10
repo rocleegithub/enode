@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Threading;
 using ECommon.Components;
 using ECommon.Configurations;
+using ECommon.Serilog;
 using ENode.Commanding;
 using ENode.Configurations;
 using NoteSample.Commands;
@@ -72,11 +73,15 @@ namespace ENode.SendCommandPerfTests
                 Assembly.Load("NoteSample.Commands"),
                 Assembly.GetExecutingAssembly()
             };
+            var loggerFactory = new SerilogLoggerFactory()
+                .AddFileLogger("ECommon", "logs\\ecommon")
+                .AddFileLogger("EQueue", "logs\\equeue")
+                .AddFileLogger("ENode", "logs\\enode", minimumLevel: Serilog.Events.LogEventLevel.Error);
             ECommon.Configurations.Configuration
                 .Create()
                 .UseAutofac()
                 .RegisterCommonComponents()
-                .UseLog4Net()
+                .UseSerilog(loggerFactory)
                 .UseJsonNet()
                 .RegisterUnhandledExceptionHandler()
                 .CreateENode()

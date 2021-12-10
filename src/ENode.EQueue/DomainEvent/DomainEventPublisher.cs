@@ -6,7 +6,7 @@ using ECommon.IO;
 using ECommon.Serializing;
 using ECommon.Utilities;
 using ENode.Eventing;
-using ENode.Infrastructure;
+using ENode.Messaging;
 using EQueue.Clients.Producers;
 using EQueueMessage = EQueue.Protocols.Message;
 
@@ -46,32 +46,30 @@ namespace ENode.EQueue
             Producer.Shutdown();
             return this;
         }
-        public Task<AsyncTaskResult> PublishAsync(DomainEventStreamMessage eventStream)
-        {
-            var message = CreateEQueueMessage(eventStream);
-            return _sendMessageService.SendMessageAsync(Producer, message, eventStream.GetRoutingKey() ?? eventStream.AggregateRootId, eventStream.Id, eventStream.Version.ToString());
-        }
-
-        private EQueueMessage CreateEQueueMessage(DomainEventStreamMessage eventStream)
+        public Task PublishAsync(DomainEventStreamMessage eventStream)
         {
             Ensure.NotNull(eventStream.AggregateRootId, "aggregateRootId");
             var eventMessage = CreateEventMessage(eventStream);
             var topic = _eventTopicProvider.GetTopic(eventStream.Events.First());
             var data = _jsonSerializer.Serialize(eventMessage);
-            return new EQueueMessage(topic, (int)EQueueMessageTypeCode.DomainEventStreamMessage, Encoding.UTF8.GetBytes(data));
+            var equeueMessage = new EQueueMessage(topic, (int)EQueueMessageTypeCode.DomainEventStreamMessage, Encoding.UTF8.GetBytes(data));
+
+            return _sendMessageService.SendMessageAsync(Producer, "events", string.Join(",", eventStream.Events.Select(x => x.GetType().Name)), equeueMessage, data, eventStream.AggregateRootId, eventStream.Id, eventStream.Items);
         }
+
         private EventStreamMessage CreateEventMessage(DomainEventStreamMessage eventStream)
         {
-            var message = new EventStreamMessage();
-
-            message.Id = eventStream.Id;
-            message.CommandId = eventStream.CommandId;
-            message.AggregateRootTypeName = eventStream.AggregateRootTypeName;
-            message.AggregateRootId = eventStream.AggregateRootId;
-            message.Timestamp = eventStream.Timestamp;
-            message.Version = eventStream.Version;
-            message.Events = _eventSerializer.Serialize(eventStream.Events);
-            message.Items = eventStream.Items;
+            var message = new EventStreamMessage
+            {
+                Id = eventStream.Id,
+                CommandId = eventStream.CommandId,
+                AggregateRootTypeName = eventStream.AggregateRootTypeName,
+                AggregateRootId = eventStream.AggregateRootId,
+                Timestamp = eventStream.Timestamp,
+                Version = eventStream.Version,
+                Events = _eventSerializer.Serialize(eventStream.Events),
+                Items = eventStream.Items
+            };
 
             return message;
         }

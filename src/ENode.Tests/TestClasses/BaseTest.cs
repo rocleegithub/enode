@@ -1,13 +1,15 @@
 ﻿using System.Configuration;
 using System.Reflection;
+using System.Threading;
 using ECommon.Components;
 using ECommon.Configurations;
 using ECommon.Logging;
+using ECommon.Serilog;
 using ENode.Commanding;
 using ENode.Configurations;
 using ENode.Domain;
 using ENode.Eventing;
-using ENode.Infrastructure;
+using ENode.Messaging;
 using ENode.SqlServer;
 using NUnit.Framework;
 using ECommonConfiguration = ECommon.Configurations.Configuration;
@@ -17,6 +19,7 @@ namespace ENode.Tests
     public abstract class BaseTest
     {
         private ENodeConfiguration _enodeConfiguration;
+        private static SerilogLoggerFactory _serilogLoggerFactory;
         protected ILogger _logger;
         protected ICommandService _commandService;
         protected IMemoryCache _memoryCache;
@@ -24,20 +27,20 @@ namespace ENode.Tests
         protected IPublishedVersionStore _publishedVersionStore;
         protected IMessagePublisher<DomainEventStreamMessage> _domainEventPublisher;
         protected IMessagePublisher<IApplicationMessage> _applicationMessagePublisher;
-        protected IMessagePublisher<IPublishableException> _publishableExceptionPublisher;
+        protected IMessagePublisher<IDomainException> _domainExceptionPublisher;
 
         protected void Initialize(
             bool useMockEventStore = false,
             bool useMockPublishedVersionStore = false,
             bool useMockDomainEventPublisher = false,
             bool useMockApplicationMessagePublisher = false,
-            bool useMockPublishableExceptionPublisher = false)
+            bool useMockDomainExceptionPublisher = false)
         {
             InitializeENode(useMockEventStore,
                 useMockPublishedVersionStore,
                 useMockDomainEventPublisher,
                 useMockApplicationMessagePublisher,
-                useMockPublishableExceptionPublisher);
+                useMockDomainExceptionPublisher);
         }
 
         [SetUp]
@@ -57,6 +60,7 @@ namespace ENode.Tests
             if (_enodeConfiguration != null)
             {
                 CleanupEnode();
+                Thread.Sleep(3000);
             }
         }
 
@@ -65,28 +69,38 @@ namespace ENode.Tests
             bool useMockPublishedVersionStore = false,
             bool useMockDomainEventPublisher = false,
             bool useMockApplicationMessagePublisher = false,
-            bool useMockPublishableExceptionPublisher = false)
+            bool useMockDomainExceptionPublisher = false)
         {
             var connectionString = ConfigurationManager.AppSettings["connectionString"];
             var assemblies = new[]
             {
                 Assembly.GetExecutingAssembly()
             };
-
+            if (_serilogLoggerFactory == null)
+            {
+                _serilogLoggerFactory = new SerilogLoggerFactory(defaultLoggerFileName: "logs\\default")
+                    .AddFileLogger("ECommon", "logs\\ecommon")
+                    .AddFileLogger("EQueue", "logs\\equeue")
+                    .AddFileLogger("ENode", "logs\\enode");
+            }
+            var configurationSetting = new ConfigurationSetting
+            {
+                ProcessTryToRefreshAggregateIntervalMilliseconds = 1000
+            };
             _enodeConfiguration = ECommonConfiguration
                 .Create()
                 .UseAutofac()
                 .RegisterCommonComponents()
-                .UseLog4Net()
+                .UseSerilog(_serilogLoggerFactory)
                 .UseJsonNet()
                 .RegisterUnhandledExceptionHandler()
-                .CreateENode()
+                .CreateENode(configurationSetting)
                 .RegisterENodeComponents()
                 .UseEventStore(useMockEventStore)
                 .UsePublishedVersionStore(useMockPublishedVersionStore)
                 .RegisterBusinessComponents(assemblies)
                 .InitializeEQueue()
-                .UseEQueue(useMockDomainEventPublisher, useMockApplicationMessagePublisher, useMockPublishableExceptionPublisher)
+                .UseEQueue(useMockDomainEventPublisher, useMockApplicationMessagePublisher, useMockDomainExceptionPublisher)
                 .BuildContainer();
 
             if (!useMockEventStore)
@@ -109,7 +123,7 @@ namespace ENode.Tests
             _publishedVersionStore = ObjectContainer.Resolve<IPublishedVersionStore>();
             _domainEventPublisher = ObjectContainer.Resolve<IMessagePublisher<DomainEventStreamMessage>>();
             _applicationMessagePublisher = ObjectContainer.Resolve<IMessagePublisher<IApplicationMessage>>();
-            _publishableExceptionPublisher = ObjectContainer.Resolve<IMessagePublisher<IPublishableException>>();
+            _domainExceptionPublisher = ObjectContainer.Resolve<IMessagePublisher<IDomainException>>();
             _logger = ObjectContainer.Resolve<ILoggerFactory>().Create(typeof(BaseTest));
             _logger.Info("----ENode initialized.");
         }

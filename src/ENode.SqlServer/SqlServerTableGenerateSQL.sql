@@ -1,8 +1,3 @@
-CREATE DATABASE [ENode]
-GO
-USE [ENode]
-GO
-
 CREATE TABLE [dbo].[EventStream] (
     [Sequence]              BIGINT IDENTITY (1, 1) NOT NULL,
     [AggregateRootTypeName] NVARCHAR (256)         NOT NULL,
@@ -30,7 +25,7 @@ CREATE TABLE [dbo].[PublishedVersion] (
     CONSTRAINT [PK_PublishedVersion] PRIMARY KEY CLUSTERED ([Sequence] ASC)
 )
 GO
-CREATE UNIQUE INDEX [IX_PublishedVersion_AggId_Version]   ON [dbo].[PublishedVersion] ([ProcessorName] ASC, [AggregateRootId] ASC, [Version] ASC)
+CREATE UNIQUE INDEX [IX_PublishedVersion_AggId_Version]   ON [dbo].[PublishedVersion] ([ProcessorName] ASC, [AggregateRootId] ASC)
 GO
 
 CREATE TABLE [dbo].[LockKey] (

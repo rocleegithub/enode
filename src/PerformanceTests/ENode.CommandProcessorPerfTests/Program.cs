@@ -9,11 +9,13 @@ using System.Threading.Tasks;
 using ECommon.Components;
 using ECommon.Configurations;
 using ECommon.Logging;
+using ECommon.Serilog;
 using ECommon.Utilities;
 using ENode.Commanding;
 using ENode.Configurations;
 using ENode.Domain;
 using ENode.Eventing;
+using ENode.Messaging;
 using NoteSample.Commands;
 using ECommonConfiguration = ECommon.Configurations.Configuration;
 
@@ -27,7 +29,7 @@ namespace ENode.CommandProcessorPerfTests
         static Stopwatch _watch;
         static IRepository _repository;
         static ICommandProcessor _commandProcessor;
-        static IEventService _eventService;
+        static IEventCommittingService _eventService;
         static int _commandCount;
         static int _executedCount;
         static int _totalCommandCount;
@@ -91,12 +93,15 @@ namespace ENode.CommandProcessorPerfTests
                 Assembly.Load("NoteSample.CommandHandlers"),
                 Assembly.GetExecutingAssembly()
             };
-
+            var loggerFactory = new SerilogLoggerFactory()
+                .AddFileLogger("ECommon", "logs\\ecommon")
+                .AddFileLogger("EQueue", "logs\\equeue")
+                .AddFileLogger("ENode", "logs\\enode", minimumLevel: Serilog.Events.LogEventLevel.Error);
             _configuration = ECommonConfiguration
                 .Create()
                 .UseAutofac()
                 .RegisterCommonComponents()
-                .UseLog4Net()
+                .UseSerilog(loggerFactory)
                 .UseJsonNet()
                 .RegisterUnhandledExceptionHandler()
                 .CreateENode()
@@ -104,7 +109,7 @@ namespace ENode.CommandProcessorPerfTests
                 .RegisterBusinessComponents(assemblies)
                 .BuildContainer()
                 .InitializeBusinessAssemblies(assemblies);
-            _eventService = ObjectContainer.Resolve<IEventService>();
+            _eventService = ObjectContainer.Resolve<IEventCommittingService>();
 
             _logger = ObjectContainer.Resolve<ILoggerFactory>().Create("main");
             _repository = ObjectContainer.Resolve<IRepository>();
@@ -118,6 +123,7 @@ namespace ENode.CommandProcessorPerfTests
             private readonly ConcurrentDictionary<string, IAggregateRoot> _aggregateRoots;
             private readonly int _printSize;
             private string _result;
+            private IApplicationMessage _applicationMessage;
 
             public CommandExecuteContext(int commandCount)
             {
@@ -198,6 +204,16 @@ namespace ENode.CommandProcessorPerfTests
             public string GetResult()
             {
                 return _result;
+            }
+
+            public void SetApplicationMessage(IApplicationMessage applicationMessage)
+            {
+                _applicationMessage = applicationMessage;
+            }
+
+            public IApplicationMessage GetApplicationMessage()
+            {
+                return _applicationMessage;
             }
         }
     }

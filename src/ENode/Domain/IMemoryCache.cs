@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace ENode.Domain
@@ -20,13 +19,20 @@ namespace ENode.Domain
         /// <param name="aggregateRootId"></param>
         /// <returns></returns>
         Task<T> GetAsync<T>(object aggregateRootId) where T : class, IAggregateRoot;
-        /// <summary>Set an aggregate to memory cache.
+        /// <summary>Accept the given aggregate root's changes.
         /// </summary>
         /// <param name="aggregateRoot"></param>
-        void Set(IAggregateRoot aggregateRoot);
-        /// <summary>Refresh the aggregate memory cache by replaying events of event store.
+        /// <returns></returns>
+        Task AcceptAggregateRootChanges(IAggregateRoot aggregateRoot);
+        /// <summary>Refresh the aggregate memory cache by replaying events of event store, and return the refreshed aggregate root.
         /// </summary>
-        Task RefreshAggregateFromEventStoreAsync(string aggregateRootTypeName, string aggregateRootId);
+        Task<IAggregateRoot> RefreshAggregateFromEventStoreAsync(string aggregateRootTypeName, string aggregateRootId);
+        /// <summary>Refresh the aggregate memory cache by replaying events of event store, and return the refreshed aggregate root.
+        /// </summary>
+        /// <param name="aggregateRootType"></param>
+        /// <param name="aggregateRootId"></param>
+        /// <returns></returns>
+        Task<IAggregateRoot> RefreshAggregateFromEventStoreAsync(Type aggregateRootType, string aggregateRootId);
         /// <summary>Start background tasks.
         /// </summary>
         void Start();

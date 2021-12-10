@@ -19,7 +19,6 @@ namespace ENode.EQueue
         private IJsonSerializer _jsonSerializer;
         private ITopicProvider<ICommand> _commandTopicProvider;
         private ITypeNameProvider _typeNameProvider;
-        private ICommandRoutingKeyProvider _commandRouteKeyProvider;
         private SendQueueMessageService _sendMessageService;
         private CommandResultProcessor _commandResultProcessor;
         private IOHelper _ioHelper;
@@ -33,7 +32,6 @@ namespace ENode.EQueue
             _jsonSerializer = ObjectContainer.Resolve<IJsonSerializer>();
             _commandTopicProvider = ObjectContainer.Resolve<ITopicProvider<ICommand>>();
             _typeNameProvider = ObjectContainer.Resolve<ITypeNameProvider>();
-            _commandRouteKeyProvider = ObjectContainer.Resolve<ICommandRoutingKeyProvider>();
             _sendMessageService = new SendQueueMessageService();
             _logger = ObjectContainer.Resolve<ILoggerFactory>().Create(GetType().FullName);
             _ioHelper = ObjectContainer.Resolve<IOHelper>();
@@ -65,44 +63,36 @@ namespace ENode.EQueue
             }
             return this;
         }
-        public Task<AsyncTaskResult> SendAsync(ICommand command)
+        public Task SendAsync(ICommand command)
         {
-            try
-            {
-                return _sendMessageService.SendMessageAsync(Producer, BuildCommandMessage(command, false), _commandRouteKeyProvider.GetRoutingKey(command), command.Id, null);
-            }
-            catch (Exception ex)
-            {
-                return Task.FromResult(new AsyncTaskResult(AsyncTaskStatus.Failed, ex.Message));
-            }
+            var equeueMessage = BuildCommandMessage(command, out string messageBody, false);
+            return _sendMessageService.SendMessageAsync(Producer, "command", command.GetType().Name, equeueMessage, messageBody, command.AggregateRootId, command.Id, command.Items);
         }
-        public Task<AsyncTaskResult<CommandResult>> ExecuteAsync(ICommand command)
+        public Task<CommandResult> ExecuteAsync(ICommand command)
         {
             return ExecuteAsync(command, CommandReturnType.CommandExecuted);
         }
-        public async Task<AsyncTaskResult<CommandResult>> ExecuteAsync(ICommand command, CommandReturnType commandReturnType)
+        public async Task<CommandResult> ExecuteAsync(ICommand command, CommandReturnType commandReturnType)
         {
+            Ensure.NotNull(_commandResultProcessor, "commandResultProcessor");
+            var taskCompletionSource = new TaskCompletionSource<CommandResult>();
+            _commandResultProcessor.RegisterProcessingCommand(command, commandReturnType, taskCompletionSource);
+
             try
             {
-                Ensure.NotNull(_commandResultProcessor, "commandResultProcessor");
-                var taskCompletionSource = new TaskCompletionSource<AsyncTaskResult<CommandResult>>();
-                _commandResultProcessor.RegisterProcessingCommand(command, commandReturnType, taskCompletionSource);
-
-                var result = await _sendMessageService.SendMessageAsync(Producer, BuildCommandMessage(command, true), _commandRouteKeyProvider.GetRoutingKey(command), command.Id, null).ConfigureAwait(false);
-                if (result.Status == AsyncTaskStatus.Success)
-                {
-                    return await taskCompletionSource.Task.ConfigureAwait(false);
-                }
-                _commandResultProcessor.ProcessFailedSendingCommand(command);
-                return new AsyncTaskResult<CommandResult>(result.Status, result.ErrorMessage);
+                var equeueMessage = BuildCommandMessage(command, out string messageBody, true);
+                await _sendMessageService.SendMessageAsync(Producer, "command", command.GetType().Name, equeueMessage, messageBody, command.AggregateRootId, command.Id, command.Items).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch
             {
-                return new AsyncTaskResult<CommandResult>(AsyncTaskStatus.Failed, ex.Message);
+                _commandResultProcessor.ProcessFailedSendingCommand(command);
+                throw;
             }
+
+            return await taskCompletionSource.Task.ConfigureAwait(false);
         }
 
-        private EQueueMessage BuildCommandMessage(ICommand command, bool needReply = false)
+        private EQueueMessage BuildCommandMessage(ICommand command, out string messageBody, bool needReply = false)
         {
             Ensure.NotNull(command.AggregateRootId, "aggregateRootId");
             var commandData = _jsonSerializer.Serialize(command);
@@ -113,6 +103,7 @@ namespace ENode.EQueue
                 CommandData = commandData,
                 ReplyAddress = replyAddress
             });
+            messageBody = messageData;
             return new EQueueMessage(
                 topic, 
                 (int)EQueueMessageTypeCode.CommandMessage,

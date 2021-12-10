@@ -1,16 +1,15 @@
 ﻿using System.Threading.Tasks;
-using ECommon.IO;
-using ENode.Infrastructure;
+using ENode.Messaging;
 using ENode.Tests.Domain;
 
 namespace ENode.Tests.EventHandlers
 {
     public class TestAggregateEventHandler : IMessageHandler<TestAggregateCreated>
     {
-        public Task<AsyncTaskResult> HandleAsync(TestAggregateCreated evnt)
+        public Task HandleAsync(TestAggregateCreated evnt)
         {
             //DO NOTHING
-            return Task.FromResult(AsyncTaskResult.Success);
+            return Task.CompletedTask;
         }
     }
 }

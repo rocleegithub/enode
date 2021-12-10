@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -36,12 +37,6 @@ namespace ENode.MySQL
 
         #endregion
 
-        #region Public Properties
-
-        public bool SupportBatchAppendEvent { get; set; }
-
-        #endregion
-
         #region Public Methods
 
         public MySqlEventStore Initialize(
@@ -71,146 +66,63 @@ namespace ENode.MySQL
             _ioHelper = ObjectContainer.Resolve<IOHelper>();
             _logger = ObjectContainer.Resolve<ILoggerFactory>().Create(GetType().FullName);
 
-            SupportBatchAppendEvent = true;
-
             return this;
         }
-        public Task<AsyncTaskResult<IEnumerable<DomainEventStream>>> QueryAggregateEventsAsync(string aggregateRootId, string aggregateRootTypeName, int minVersion, int maxVersion)
+        public Task<IEnumerable<DomainEventStream>> QueryAggregateEventsAsync(string aggregateRootId, string aggregateRootTypeName, int minVersion, int maxVersion)
         {
+            var sql = string.Format(QueryEventsSql, GetTableName(aggregateRootId));
+
             return _ioHelper.TryIOFuncAsync(async () =>
             {
                 try
                 {
                     using (var connection = GetConnection())
                     {
-                        var sql = string.Format(QueryEventsSql, GetTableName(aggregateRootId));
+                        await connection.OpenAsync().ConfigureAwait(false);
                         var result = await connection.QueryAsync<StreamRecord>(sql, new
                         {
                             AggregateRootId = aggregateRootId,
                             MinVersion = minVersion,
                             MaxVersion = maxVersion
-                        });
-                        var streams = result.Select(ConvertFrom);
-                        return new AsyncTaskResult<IEnumerable<DomainEventStream>>(AsyncTaskStatus.Success, streams);
+                        }).ConfigureAwait(false);
+                        return result.Select(ConvertFrom);
                     }
-                }
-                catch (MySqlException ex)
-                {
-                    var errorMessage = string.Format("Failed to query aggregate events async, aggregateRootId: {0}, aggregateRootType: {1}", aggregateRootId, aggregateRootTypeName);
-                    _logger.Error(errorMessage, ex);
-                    return new AsyncTaskResult<IEnumerable<DomainEventStream>>(AsyncTaskStatus.IOException, ex.Message);
                 }
                 catch (Exception ex)
                 {
                     var errorMessage = string.Format("Failed to query aggregate events async, aggregateRootId: {0}, aggregateRootType: {1}", aggregateRootId, aggregateRootTypeName);
                     _logger.Error(errorMessage, ex);
-                    return new AsyncTaskResult<IEnumerable<DomainEventStream>>(AsyncTaskStatus.Failed, ex.Message);
+                    throw;
                 }
             }, "QueryAggregateEventsAsync");
         }
-        public Task<AsyncTaskResult<EventAppendResult>> BatchAppendAsync(IEnumerable<DomainEventStream> eventStreams)
+        public Task<EventAppendResult> BatchAppendAsync(IEnumerable<DomainEventStream> eventStreams)
         {
-            if (!SupportBatchAppendEvent)
+            if (eventStreams.Count() == 0)
             {
-                throw new NotSupportedException("Unsupport batch append event.");
+                return Task.FromResult(new EventAppendResult());
             }
-            if (!eventStreams.Any())
-            {
-                throw new ArgumentException("Event streams cannot be empty.");
-            }
-            var aggregateRootIds = eventStreams.Select(x => x.AggregateRootId).Distinct();
-            if (aggregateRootIds.Count() > 1)
-            {
-                throw new ArgumentException("Batch append event only support for one aggregate.");
-            }
-            var aggregateRootId = aggregateRootIds.Single();
-            string sql = string.Format(InsertEventSql, GetTableName(aggregateRootId));
-            var streamRecords = eventStreams.Select(ConvertTo);
 
-            return _ioHelper.TryIOFuncAsync(async () =>
+            var eventStreamDict = new Dictionary<string, IList<DomainEventStream>>();
+            var aggregateRootIdList = eventStreams.Select(x => x.AggregateRootId).Distinct().ToList();
+            foreach (var aggregateRootId in aggregateRootIdList)
             {
-                try
+                var eventStreamList = eventStreams.Where(x => x.AggregateRootId == aggregateRootId).ToList();
+                if (eventStreamList.Count > 0)
                 {
-                    using (var connection = GetConnection())
-                    {
-                        await connection.OpenAsync();
-                        var transaction = await Task.Run(() => connection.BeginTransaction());
-                        try
-                        {
-                            await connection.ExecuteAsync(sql, streamRecords, transaction: transaction, commandTimeout: _batchInsertTimeoutSeconds);
-                            await Task.Run(() => transaction.Commit());
-                            return new AsyncTaskResult<EventAppendResult>(AsyncTaskStatus.Success, EventAppendResult.Success);
-                        }
-                        catch
-                        {
-                            try
-                            {
-                                transaction.Rollback();
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.ErrorFormat("Transaction rollback failed.", ex);
-                            }
-                            throw;
-                        }
-                    }
+                    eventStreamDict.Add(aggregateRootId, eventStreamList);
                 }
-                catch (MySqlException ex)
-                {
-                    if (ex.Number == 1062 && ex.Message.Contains(_versionIndexName))
-                    {
-                        return new AsyncTaskResult<EventAppendResult>(AsyncTaskStatus.Success, EventAppendResult.DuplicateEvent);
-                    }
-                    if (ex.Number == 1062 && ex.Message.Contains(_commandIndexName))
-                    {
-                        return new AsyncTaskResult<EventAppendResult>(AsyncTaskStatus.Success, EventAppendResult.DuplicateCommand);
-                    }
-                    _logger.Error("Batch append event has sql exception.", ex);
-                    return new AsyncTaskResult<EventAppendResult>(AsyncTaskStatus.IOException, ex.Message, EventAppendResult.Failed);
-                }
-                catch (Exception ex)
-                {
-                    _logger.Error("Batch append event has unknown exception.", ex);
-                    return new AsyncTaskResult<EventAppendResult>(AsyncTaskStatus.Failed, ex.Message, EventAppendResult.Failed);
-                }
-            }, "BatchAppendEventsAsync");
-        }
-        public Task<AsyncTaskResult<EventAppendResult>> AppendAsync(DomainEventStream eventStream)
-        {
-            var record = ConvertTo(eventStream);
-            string sql = string.Format(InsertEventSql, GetTableName(record.AggregateRootId));
+            }
 
-            return _ioHelper.TryIOFuncAsync(async () =>
+            var batchAggregateEventAppendResult = new BatchAggregateEventAppendResult(eventStreamDict.Keys.Count);
+            foreach (var entry in eventStreamDict)
             {
-                try
-                {
-                    using (var connection = GetConnection())
-                    {
-                        await connection.ExecuteAsync(sql, record);
-                        return new AsyncTaskResult<EventAppendResult>(AsyncTaskStatus.Success, EventAppendResult.Success);
-                    }
-                }
-                catch (MySqlException ex)
-                {
-                    if (ex.Number == 1062 && ex.Message.Contains(_versionIndexName))
-                    {
-                        return new AsyncTaskResult<EventAppendResult>(AsyncTaskStatus.Success, EventAppendResult.DuplicateEvent);
-                    }
-                    else if (ex.Number == 1062 && ex.Message.Contains(_commandIndexName))
-                    {
-                        return new AsyncTaskResult<EventAppendResult>(AsyncTaskStatus.Success, EventAppendResult.DuplicateCommand);
-                    }
-                    _logger.Error(string.Format("Append event has sql exception, eventStream: {0}", eventStream), ex);
-                    return new AsyncTaskResult<EventAppendResult>(AsyncTaskStatus.IOException, ex.Message, EventAppendResult.Failed);
-                }
-                catch (Exception ex)
-                {
-                    _logger.Error(string.Format("Append event has unknown exception, eventStream: {0}", eventStream), ex);
-                    return new AsyncTaskResult<EventAppendResult>(AsyncTaskStatus.Failed, ex.Message, EventAppendResult.Failed);
-                }
-            }, "AppendEventsAsync");
+                BatchAppendAggregateEventsAsync(entry.Key, entry.Value, batchAggregateEventAppendResult, 0);
+            }
+
+            return batchAggregateEventAppendResult.TaskCompletionSource.Task;  
         }
-        public Task<AsyncTaskResult<DomainEventStream>> FindAsync(string aggregateRootId, int version)
+        public Task<DomainEventStream> FindAsync(string aggregateRootId, int version)
         {
             return _ioHelper.TryIOFuncAsync(async () =>
             {
@@ -218,25 +130,20 @@ namespace ENode.MySQL
                 {
                     using (var connection = GetConnection())
                     {
-                        var result = await connection.QueryListAsync<StreamRecord>(new { AggregateRootId = aggregateRootId, Version = version }, GetTableName(aggregateRootId));
+                        await connection.OpenAsync().ConfigureAwait(false);
+                        var result = await connection.QueryListAsync<StreamRecord>(new { AggregateRootId = aggregateRootId, Version = version }, GetTableName(aggregateRootId)).ConfigureAwait(false);
                         var record = result.SingleOrDefault();
-                        var stream = record != null ? ConvertFrom(record) : null;
-                        return new AsyncTaskResult<DomainEventStream>(AsyncTaskStatus.Success, stream);
+                        return record != null ? ConvertFrom(record) : null;
                     }
-                }
-                catch (MySqlException ex)
-                {
-                    _logger.Error(string.Format("Find event by version has sql exception, aggregateRootId: {0}, version: {1}", aggregateRootId, version), ex);
-                    return new AsyncTaskResult<DomainEventStream>(AsyncTaskStatus.IOException, ex.Message);
                 }
                 catch (Exception ex)
                 {
                     _logger.Error(string.Format("Find event by version has unknown exception, aggregateRootId: {0}, version: {1}", aggregateRootId, version), ex);
-                    return new AsyncTaskResult<DomainEventStream>(AsyncTaskStatus.Failed, ex.Message);
+                    throw;
                 }
             }, "FindEventByVersionAsync");
         }
-        public Task<AsyncTaskResult<DomainEventStream>> FindAsync(string aggregateRootId, string commandId)
+        public Task<DomainEventStream> FindAsync(string aggregateRootId, string commandId)
         {
             return _ioHelper.TryIOFuncAsync(async () =>
             {
@@ -244,21 +151,16 @@ namespace ENode.MySQL
                 {
                     using (var connection = GetConnection())
                     {
-                        var result = await connection.QueryListAsync<StreamRecord>(new { AggregateRootId = aggregateRootId, CommandId = commandId }, GetTableName(aggregateRootId));
+                        await connection.OpenAsync().ConfigureAwait(false);
+                        var result = await connection.QueryListAsync<StreamRecord>(new { AggregateRootId = aggregateRootId, CommandId = commandId }, GetTableName(aggregateRootId)).ConfigureAwait(false);
                         var record = result.SingleOrDefault();
-                        var stream = record != null ? ConvertFrom(record) : null;
-                        return new AsyncTaskResult<DomainEventStream>(AsyncTaskStatus.Success, stream);
+                        return record != null ? ConvertFrom(record) : null;
                     }
-                }
-                catch (MySqlException ex)
-                {
-                    _logger.Error(string.Format("Find event by commandId has sql exception, aggregateRootId: {0}, commandId: {1}", aggregateRootId, commandId), ex);
-                    return new AsyncTaskResult<DomainEventStream>(AsyncTaskStatus.IOException, ex.Message);
                 }
                 catch (Exception ex)
                 {
                     _logger.Error(string.Format("Find event by commandId has unknown exception, aggregateRootId: {0}, commandId: {1}", aggregateRootId, commandId), ex);
-                    return new AsyncTaskResult<DomainEventStream>(AsyncTaskStatus.Failed, ex.Message);
+                    throw;
                 }
             }, "FindEventByCommandIdAsync");
         }
@@ -267,6 +169,109 @@ namespace ENode.MySQL
 
         #region Private Methods
 
+        private void BatchAppendAggregateEventsAsync(string aggregateRootId, IList<DomainEventStream> eventStreamList, BatchAggregateEventAppendResult batchAggregateEventAppendResult, int retryTimes)
+        {
+            _ioHelper.TryAsyncActionRecursively("BatchAppendAggregateEventsAsync",
+            () => BatchAppendAggregateEventsAsync(aggregateRootId, eventStreamList),
+            currentRetryTimes => BatchAppendAggregateEventsAsync(aggregateRootId, eventStreamList, batchAggregateEventAppendResult, currentRetryTimes),
+            async result =>
+            {
+                if (result == EventAppendStatus.Success)
+                {
+                    batchAggregateEventAppendResult.AddCompleteAggregate(aggregateRootId, new AggregateEventAppendResult
+                    {
+                        EventAppendStatus = EventAppendStatus.Success
+                    });
+                }
+                else if (result == EventAppendStatus.DuplicateEvent)
+                {
+                    batchAggregateEventAppendResult.AddCompleteAggregate(aggregateRootId, new AggregateEventAppendResult
+                    {
+                        EventAppendStatus = EventAppendStatus.DuplicateEvent
+                    });
+                }
+                else if (result == EventAppendStatus.DuplicateCommand)
+                {
+                    var duplicateCommandIds = new List<string>();
+                    foreach (var eventStream in eventStreamList)
+                    {
+                        await TryFindEventByCommandIdAsync(aggregateRootId, eventStream.CommandId, duplicateCommandIds, 0);
+                    }
+                    batchAggregateEventAppendResult.AddCompleteAggregate(aggregateRootId, new AggregateEventAppendResult
+                    {
+                        EventAppendStatus = EventAppendStatus.DuplicateCommand,
+                        DuplicateCommandIds = duplicateCommandIds
+                    });
+                }
+            },
+            () => string.Format("[aggregateRootId: {0}, eventStreamCount: {1}]", aggregateRootId, eventStreamList.Count),
+            null,
+            retryTimes, true);
+        }
+        private async Task<EventAppendStatus> BatchAppendAggregateEventsAsync(string aggregateRootId, IList<DomainEventStream> eventStreamList)
+        {
+            try
+            {
+                string sql = string.Format(InsertEventSql, GetTableName(aggregateRootId));
+                var streamRecords = eventStreamList.Select(ConvertTo);
+                using (var connection = GetConnection())
+                {
+                    await connection.OpenAsync().ConfigureAwait(false);
+                    var transaction = await Task.Run(() => connection.BeginTransaction()).ConfigureAwait(false);
+                    try
+                    {
+                        await connection.ExecuteAsync(sql, streamRecords, transaction: transaction, commandTimeout: _batchInsertTimeoutSeconds).ConfigureAwait(false);
+                        await Task.Run(() => transaction.Commit()).ConfigureAwait(false);
+                        return EventAppendStatus.Success;
+                    }
+                    catch
+                    {
+                        try
+                        {
+                            transaction.Rollback();
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.ErrorFormat("BatchAppendAggregateEvents transaction rollback failed, aggregateRootId:" + aggregateRootId, ex);
+                        }
+                        throw;
+                    }
+                }
+            }
+            catch (MySqlException ex)
+            {
+                if (ex.Number == 1062 && ex.Message.Contains(_versionIndexName))
+                {
+                    return EventAppendStatus.DuplicateEvent;
+                }
+                if (ex.Number == 1062 && ex.Message.Contains(_commandIndexName))
+                {
+                    return EventAppendStatus.DuplicateCommand;
+                }
+                throw;
+            }
+        }
+        private Task TryFindEventByCommandIdAsync(string aggregateRootId, string commandId, IList<string> duplicateCommandIds, int retryTimes)
+        {
+            var taskCompletionSource = new TaskCompletionSource<bool>();
+
+            _ioHelper.TryAsyncActionRecursively("TryFindEventByCommandIdAsync",
+            () => FindAsync(aggregateRootId, commandId),
+            currentRetryTimes => TryFindEventByCommandIdAsync(aggregateRootId, commandId, duplicateCommandIds, currentRetryTimes),
+            result =>
+            {
+                if (result != null)
+                {
+                    duplicateCommandIds.Add(commandId);
+                }
+                taskCompletionSource.SetResult(true);
+            },
+            () => string.Format("[aggregateRootId:{0}, commandId:{1}]", aggregateRootId, commandId),
+            null,
+            retryTimes, true);
+
+            return taskCompletionSource.Task;
+        }
         private int GetTableIndex(string aggregateRootId)
         {
             int hash = 23;
@@ -301,7 +306,6 @@ namespace ENode.MySQL
                 record.CommandId,
                 record.AggregateRootId,
                 record.AggregateRootTypeName,
-                record.Version,
                 record.CreatedOn,
                 _eventSerializer.Deserialize<IDomainEvent>(_jsonSerializer.Deserialize<IDictionary<string, string>>(record.Events)));
         }
@@ -320,6 +324,50 @@ namespace ENode.MySQL
 
         #endregion
 
+        class BatchAggregateEventAppendResult
+        {
+            private ConcurrentDictionary<string, AggregateEventAppendResult> _aggregateEventAppendResultDict = new ConcurrentDictionary<string, AggregateEventAppendResult>();
+            public TaskCompletionSource<EventAppendResult> TaskCompletionSource = new TaskCompletionSource<EventAppendResult>();
+            private readonly int _expectedAggregateRootCount;
+
+            public BatchAggregateEventAppendResult(int expectedAggregateRootCount)
+            {
+                _expectedAggregateRootCount = expectedAggregateRootCount;
+            }
+
+            public void AddCompleteAggregate(string aggregateRootId, AggregateEventAppendResult result)
+            {
+                if (_aggregateEventAppendResultDict.TryAdd(aggregateRootId, result))
+                {
+                    var completedAggregateRootCount = _aggregateEventAppendResultDict.Keys.Count;
+                    if (completedAggregateRootCount == _expectedAggregateRootCount)
+                    {
+                        var eventAppendResult = new EventAppendResult();
+                        foreach (var entry in _aggregateEventAppendResultDict)
+                        {
+                            if (entry.Value.EventAppendStatus == EventAppendStatus.Success)
+                            {
+                                eventAppendResult.AddSuccessAggregateRootId(entry.Key);
+                            }
+                            else if (entry.Value.EventAppendStatus == EventAppendStatus.DuplicateEvent)
+                            {
+                                eventAppendResult.AddDuplicateEventAggregateRootId(entry.Key);
+                            }
+                            else if (entry.Value.EventAppendStatus == EventAppendStatus.DuplicateCommand)
+                            {
+                                eventAppendResult.AddDuplicateCommandIds(entry.Key, entry.Value.DuplicateCommandIds);
+                            }
+                        }
+                        TaskCompletionSource.TrySetResult(eventAppendResult);
+                    }
+                }
+            }
+        }
+        class AggregateEventAppendResult
+        {
+            public EventAppendStatus EventAppendStatus;
+            public IList<string> DuplicateCommandIds;
+        }
         class StreamRecord
         {
             public string AggregateRootTypeName { get; set; }

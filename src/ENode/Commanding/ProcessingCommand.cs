@@ -5,11 +5,12 @@ namespace ENode.Commanding
 {
     public class ProcessingCommand
     {
-        public ProcessingCommandMailbox Mailbox { get; set; }
+        public ProcessingCommandMailbox MailBox { get; set; }
         public long Sequence { get; set; }
         public ICommand Message { get; private set; }
         public ICommandExecuteContext CommandExecuteContext { get; private set; }
         public IDictionary<string, string> Items { get; private set; }
+        public bool IsDuplicated { get; set; }
 
         public ProcessingCommand(ICommand command, ICommandExecuteContext commandExecuteContext, IDictionary<string, string> items)
         {
